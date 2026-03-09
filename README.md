@@ -35,11 +35,13 @@ cd ovms
 ovms --port 9000 --model_name EchoVLM_V2 --model_path <echo_vlm_v2_int4> --rest_port 8000 --log_level DEBUG --rest_workers 2   
 ```
 Note: Make sure the path to the compressed model is valid    
-4. Open Windows PowerShell to test the model response
+4. Open Windows PowerShell to test the model response   
+```
 (Invoke-WebRequest -Uri "http://localhost:8000/v3/chat/completions" `
  -Method POST `
  -Headers @{ "Content-Type" = "application/json" } `
  -Body '{"model": "EchoVLM_V2", "max_tokens": 30, "temperature": 0, "stream": false, "messages": [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "What are the 3 main tourist attractions in Paris?"}]}').Content
+```
 
 ### Test Dataset   
 Download the test data from [Breast Ultrasound](https://www.kaggle.com/datasets/aryashah2k/breast-ultrasound-images-dataset/data)   
