@@ -4,6 +4,7 @@ import io
 import uuid
 from pathlib import Path
 from typing import List
+from urllib.parse import urlparse
 
 import requests
 import streamlit as st
@@ -57,10 +58,24 @@ st.markdown(
 
 
 class OVMSClient:
-    def __init__(self, endpoint: str, model_name: str, timeout_seconds: int = 180) -> None:
+    def __init__(
+        self,
+        endpoint: str,
+        model_name: str,
+        timeout_seconds: int = 180,
+        api_key: str = "",
+        bypass_proxies_for_local: bool = True,
+    ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.model_name = model_name
         self.timeout_seconds = timeout_seconds
+        self.api_key = api_key.strip()
+        self.bypass_proxies_for_local = bypass_proxies_for_local
+
+    @staticmethod
+    def _is_local_endpoint(endpoint: str) -> bool:
+        hostname = urlparse(endpoint).hostname
+        return hostname in {"localhost", "127.0.0.1", "::1"}
 
     @staticmethod
     def _image_to_data_url(image: Image.Image) -> str:
@@ -93,8 +108,27 @@ class OVMSClient:
             "stream": False,
         }
 
-        response = requests.post(self.endpoint, json=payload, timeout=self.timeout_seconds)
-        response.raise_for_status()
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        request_kwargs = {
+            "json": payload,
+            "timeout": self.timeout_seconds,
+            "headers": headers,
+        }
+        if self.bypass_proxies_for_local and self._is_local_endpoint(self.endpoint):
+            # Avoid sending localhost traffic through enterprise proxies.
+            request_kwargs["proxies"] = {"http": None, "https": None}
+
+        response = requests.post(self.endpoint, **request_kwargs)
+        if response.status_code >= 400:
+            response_text = response.text.strip()
+            raise RuntimeError(
+                f"OVMS request failed with HTTP {response.status_code}. "
+                f"Response: {response_text or '<empty>'}"
+            )
+
         data = response.json()
 
         if "choices" not in data or not data["choices"]:
@@ -104,8 +138,20 @@ class OVMSClient:
 
 
 @st.cache_resource
-def get_ovms_client(endpoint: str, model_name: str, timeout_seconds: int) -> OVMSClient:
-    return OVMSClient(endpoint=endpoint, model_name=model_name, timeout_seconds=timeout_seconds)
+def get_ovms_client(
+    endpoint: str,
+    model_name: str,
+    timeout_seconds: int,
+    api_key: str,
+    bypass_proxies_for_local: bool,
+) -> OVMSClient:
+    return OVMSClient(
+        endpoint=endpoint,
+        model_name=model_name,
+        timeout_seconds=timeout_seconds,
+        api_key=api_key,
+        bypass_proxies_for_local=bypass_proxies_for_local,
+    )
 
 
 def generate_report(client: OVMSClient, images: List[Image.Image]) -> str:
@@ -241,6 +287,17 @@ def main() -> None:
             help="Model name exposed by OVMS",
         )
         timeout_seconds = st.number_input("Request Timeout (sec)", min_value=30, max_value=900, value=180)
+        api_key = st.text_input(
+            "API Key (optional)",
+            value="",
+            type="password",
+            help="Set if OVMS server enforces OpenAI-compatible bearer authentication.",
+        )
+        bypass_proxies_for_local = st.checkbox(
+            "Bypass system proxy for localhost",
+            value=True,
+            help="Recommended when calling local OVMS from corporate-network environments.",
+        )
 
         st.markdown("---")
         st.subheader("Analysis Options")
@@ -367,7 +424,13 @@ def main() -> None:
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.spinner("🔄 Running EchoVLM inference on OVMS..."):
                 try:
-                    client = get_ovms_client(ovms_endpoint, model_name, timeout_seconds)
+                    client = get_ovms_client(
+                        ovms_endpoint,
+                        model_name,
+                        timeout_seconds,
+                        api_key,
+                        bypass_proxies_for_local,
+                    )
                     images = st.session_state.current_images
 
                     if include_pdf:
